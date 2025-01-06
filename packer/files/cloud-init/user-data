@@ -1,0 +1,123 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  # Locale and keyboard settings
+  locale: en_US.UTF-8
+
+  # Network configuration
+  network:
+    version: 2
+    ethernets:
+      ens192:
+        dhcp4: true
+        dhcp6: false
+
+  # Storage configuration
+  storage:
+    layout:
+      name: direct
+    swap:
+      size: 0
+
+  # Identity settings
+  identity:
+    hostname: ubuntu-template
+    username: barlog
+    password: 'LOCKED'  # Disable password login
+    realname: Barlog
+
+  # SSH settings
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFielXcLKsyndAmvCyh2qTy1NqtX+L/qAiEZe6P7FByc jozef.fuker@gmail.com"
+
+  # Package configuration
+  packages:
+    - openssh-server
+    - cloud-init
+    - open-vm-tools
+    - curl
+    - wget
+    - ca-certificates
+    - gnupg
+    - software-properties-common
+    - python3-pip
+    - jq
+    - console-setup
+    - keyboard-configuration
+    - tzdata
+    - nala
+    - nano
+    - htop
+    - language-pack-en
+
+  # Late commands
+  late-commands:
+    # Create required directories
+    - mkdir -p /target/etc/default
+    - mkdir -p /target/etc/ssh/sshd_config.d
+
+    # Locale settings
+    - echo "LANG=en_US.UTF-8" > /target/etc/default/locale
+    - echo "LANGUAGE=en_US:en" >> /target/etc/default/locale
+
+    # SSH config - Disable password authentication
+    - echo 'PermitRootLogin no' >> /target/etc/ssh/sshd_config.d/default.conf
+    - echo 'PasswordAuthentication no' >> /target/etc/ssh/sshd_config.d/default.conf
+    - echo 'PubkeyAuthentication yes' >> /target/etc/ssh/sshd_config.d/default.conf
+    - echo 'ChallengeResponseAuthentication no' >> /target/etc/ssh/sshd_config.d/default.conf
+    - echo 'UsePAM yes' >> /target/etc/ssh/sshd_config.d/default.conf
+
+    # Keyboard layout
+    - echo "XKBMODEL=\"pc105\"" > /target/etc/default/keyboard
+    - echo "XKBLAYOUT=\"sk\"" >> /target/etc/default/keyboard
+    - echo "XKBVARIANT=\"\"" >> /target/etc/default/keyboard
+    - echo "XKBOPTIONS=\"\"" >> /target/etc/default/keyboard
+    - echo "BACKSPACE=\"guess\"" >> /target/etc/default/keyboard
+    - curtin in-target --target=/target -- dpkg-reconfigure -f noninteractive keyboard-configuration
+
+    # Timezone setup
+    - curtin in-target --target=/target -- timedatectl set-timezone Europe/Bratislava
+    - ln -sf /usr/share/zoneinfo/Europe/Bratislava /target/etc/localtime
+    - echo "Europe/Bratislava" > /target/etc/timezone
+
+    # Sudo configuration for barlog
+    - echo 'barlog ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/barlog
+    - chmod 440 /target/etc/sudoers.d/barlog
+
+    # Cleanup netplan configs
+    - rm -f /target/etc/netplan/00-installer-config.yaml
+    - rm -f /target/etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg
+
+    # Enable and start open-vm-tools
+    - curtin in-target --target=/target -- apt-get update
+    - curtin in-target --target=/target -- apt-get install -y open-vm-tools
+    - curtin in-target --target=/target -- systemctl enable open-vm-tools
+    - curtin in-target --target=/target -- systemctl start open-vm-tools
+
+    # Enable SSH service
+    - curtin in-target --target=/target -- systemctl enable ssh
+    - curtin in-target --target=/target -- systemctl start ssh
+
+  # User data configuration
+  user-data:
+    users:
+      - name: barlog
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        groups: sudo
+        shell: /bin/bash
+        ssh_authorized_keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFielXcLKsyndAmvCyh2qTy1NqtX+L/qAiEZe6P7FByc jozef.fuker@gmail.com"
+    disable_root: true
+    package_upgrade: true
+    timezone: Europe/Bratislava
+    ssh_pwauth: false
+    runcmd:
+      - systemctl restart ssh
+      - localectl set-x11-keymap sk pc105
+      - timedatectl set-timezone Europe/Bratislava
+      - systemctl restart systemd-timesyncd
+      - update-locale LANG=en_US.UTF-8

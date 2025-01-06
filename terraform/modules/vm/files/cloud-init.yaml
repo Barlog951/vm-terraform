@@ -1,0 +1,33 @@
+#cloud-config
+hostname: ${hostname}
+
+write_files:
+  - path: /etc/netplan/50-cloud-init.yaml
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        ethernets:
+          %{~ for net in network_config ~}
+          ${net.name}:
+            dhcp4: ${net.dhcp4}
+            %{~ if !net.dhcp4 ~}
+            addresses:
+              - ${net.static.address}/${net.static.netmask}
+            routes:
+              - to: default
+                via: ${net.static.gateway}
+            nameservers:
+              addresses:
+                %{~ for dns in net.static.dns ~}
+                - ${dns}
+                %{~ endfor ~}
+            %{~ endif ~}
+          %{~ endfor ~}
+
+runcmd:
+  - hostnamectl set-hostname ${hostname}
+  - chmod 600 /etc/netplan/50-cloud-init.yaml
+  - netplan generate
+  - netplan apply
+  - systemctl restart systemd-networkd
