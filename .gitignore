@@ -64,5 +64,4 @@ zsdoc/data
 .env
 *.iso
 
-packer/packer.log
-packer/packer/packer.log
+*.log
