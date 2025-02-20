@@ -53,6 +53,7 @@ autoinstall:
     - nano
     - htop
     - language-pack-en
+    - screenfetch
 
   # Late commands
   late-commands:
