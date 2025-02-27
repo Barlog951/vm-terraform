@@ -152,13 +152,54 @@ generate_packer_key
 echo -e "\n${GREEN}Updating cloud-init configuration...${NC}"
 update_cloud_init
 
+# Check and update Packer configuration
+echo -e "\n${GREEN}Checking Packer configuration...${NC}"
+PACKER_CONFIG="../packer/ubuntu.pkr.hcl"
+if [[ -f "${PACKER_CONFIG}" ]]; then
+    # Check if the SSH key path needs to be updated
+    if ! grep -q "${SSH_KEY_PATH}/${PACKER_KEY_NAME}" "${PACKER_CONFIG}"; then
+        echo -e "${YELLOW}Packer configuration might need updating with the correct SSH key path${NC}"
+        echo -e "${YELLOW}Please check ${PACKER_CONFIG} and update ssh_private_key_file if needed${NC}"
+    else
+        echo -e "${GREEN}Packer configuration already contains the correct SSH key path${NC}"
+    fi
+fi
+
 echo -e "\n${GREEN}SSH key configuration complete!${NC}"
 echo "Locations:"
 echo "Packer key: ${SSH_KEY_PATH}/${PACKER_KEY_NAME}{,.pub} (temporary, will be removed after template creation)"
 echo "Your SSH key: ${EXISTING_SSH_KEY}"
 
-# Remind about env.sh updates
-echo -e "\n${YELLOW}Remember to update env.sh with these paths:${NC}"
-echo "export PACKER_SSH_PRIVATE_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}\""
-echo "export PACKER_SSH_PUBLIC_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}.pub\""
-echo "export EXISTING_SSH_KEY=\"${EXISTING_SSH_KEY}\""
+# Remind about env.sh updates and write directly if possible
+echo -e "\n${YELLOW}Updating env.sh with these key paths:${NC}"
+ENV_PATH="../env.sh"
+if [[ -f "${ENV_PATH}" && -w "${ENV_PATH}" ]]; then
+    # Backup env.sh
+    cp "${ENV_PATH}" "${ENV_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+    
+    # Update or add the key paths
+    if grep -q "PACKER_SSH_PRIVATE_KEY_FILE" "${ENV_PATH}"; then
+        sed -i "s|export PACKER_SSH_PRIVATE_KEY_FILE=.*|export PACKER_SSH_PRIVATE_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}\"|" "${ENV_PATH}"
+    else
+        echo "export PACKER_SSH_PRIVATE_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}\"" >> "${ENV_PATH}"
+    fi
+    
+    if grep -q "PACKER_SSH_PUBLIC_KEY_FILE" "${ENV_PATH}"; then
+        sed -i "s|export PACKER_SSH_PUBLIC_KEY_FILE=.*|export PACKER_SSH_PUBLIC_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}.pub\"|" "${ENV_PATH}"
+    else
+        echo "export PACKER_SSH_PUBLIC_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}.pub\"" >> "${ENV_PATH}"
+    fi
+    
+    if grep -q "EXISTING_SSH_KEY" "${ENV_PATH}"; then
+        sed -i "s|export EXISTING_SSH_KEY=.*|export EXISTING_SSH_KEY=\"${EXISTING_SSH_KEY}\"|" "${ENV_PATH}"
+    else
+        echo "export EXISTING_SSH_KEY=\"${EXISTING_SSH_KEY}\"" >> "${ENV_PATH}"
+    fi
+    
+    echo -e "${GREEN}✓ env.sh updated successfully!${NC}"
+else
+    echo -e "${YELLOW}Please manually update your env.sh file with these paths:${NC}"
+    echo "export PACKER_SSH_PRIVATE_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}\""
+    echo "export PACKER_SSH_PUBLIC_KEY_FILE=\"${SSH_KEY_PATH}/${PACKER_KEY_NAME}.pub\""
+    echo "export EXISTING_SSH_KEY=\"${EXISTING_SSH_KEY}\""
+fi

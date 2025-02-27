@@ -34,33 +34,47 @@ log_message() {
     echo -e "${timestamp} [${level}] ${message}" | tee -a "$LOG_FILE"
 }
 
-# Function to build template using Packer
+# Function to build template using Packer with error handling
 build_template() {
     log_message "INFO" "Building new template using Packer..."
     cd "${PROJECT_ROOT}/packer"
 
+    # Backup any existing log
+    if [[ -f "${PROJECT_ROOT}/packer/packer.log" ]]; then
+        mv "${PROJECT_ROOT}/packer/packer.log" "${PROJECT_ROOT}/packer/packer.log.$(date +%Y%m%d%H%M%S).bak"
+    fi
+
     # Initialize Packer
     log_message "INFO" "Starting Packer init..."
-    packer init ubuntu.pkr.hcl
+    if ! packer init ubuntu.pkr.hcl; then
+        log_message "ERROR" "${RED}Packer initialization failed!${NC}"
+        return 1
+    fi
 
     # Build template
     log_message "INFO" "Starting Packer build..."
-    PACKER_LOG=1 PACKER_LOG_PATH="${PROJECT_ROOT}/packer/packer.log" \
-    packer build \
-        -var "vsphere_server=${VSPHERE_SERVER}" \
-        -var "vsphere_user=${VSPHERE_USER}" \
-        -var "vsphere_password=${VSPHERE_PASSWORD}" \
-        -var "vsphere_datacenter=${VSPHERE_DATACENTER}" \
-        -var "vsphere_cluster=${VSPHERE_CLUSTER}" \
-        -var "vsphere_datastore=${VSPHERE_DATASTORE}" \
-        -var "vsphere_network=${VSPHERE_NETWORK}" \
-        -var "template_name=${TEMPLATE_NAME}" \
-        ubuntu.pkr.hcl
+    local start_time=$(date +%s)
+    if ! PACKER_LOG=1 PACKER_LOG_PATH="${PROJECT_ROOT}/packer/packer.log" \
+        packer build \
+            -var "vsphere_server=${VSPHERE_SERVER}" \
+            -var "vsphere_user=${VSPHERE_USER}" \
+            -var "vsphere_password=${VSPHERE_PASSWORD}" \
+            -var "vsphere_datacenter=${VSPHERE_DATACENTER}" \
+            -var "vsphere_cluster=${VSPHERE_CLUSTER}" \
+            -var "vsphere_datastore=${VSPHERE_DATASTORE}" \
+            -var "vsphere_network=${VSPHERE_NETWORK}" \
+            -var "template_name=${TEMPLATE_NAME}" \
+            ubuntu.pkr.hcl; then
+        log_message "ERROR" "${RED}Packer build failed! Check packer.log for details.${NC}"
+        return 1
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    log_message "INFO" "${GREEN}Template built successfully in ${duration} seconds!${NC}"
 }
 
-# Function to run Terraform
-# Update the run_terraform function in deploy.sh:
-
+# Function to run Terraform with error handling
 run_terraform() {
     local action=$1
     cd "${PROJECT_ROOT}/terraform"
@@ -68,20 +82,33 @@ run_terraform() {
     case $action in
         "init")
             log_message "INFO" "Initializing Terraform..."
-            terraform init
+            if ! terraform init; then
+                log_message "ERROR" "${RED}Terraform initialization failed!${NC}"
+                return 1
+            fi
             ;;
         "plan")
             log_message "INFO" "Creating Terraform plan..."
-            terraform plan -out=tfplan
+            if ! terraform plan -out=tfplan; then
+                log_message "ERROR" "${RED}Terraform plan creation failed!${NC}"
+                return 1
+            fi
             ;;
         "apply")
             log_message "INFO" "Applying Terraform configuration..."
-            terraform apply -auto-approve tfplan
-
+            if ! terraform apply -auto-approve tfplan; then
+                log_message "ERROR" "${RED}Terraform apply failed!${NC}"
+                return 1
+            fi
+            log_message "INFO" "Running post-apply validation..."
+            terraform output -json > "${PROJECT_ROOT}/terraform/last_output.json"
             ;;
         "destroy")
             log_message "INFO" "${RED}Destroying infrastructure...${NC}"
-            terraform destroy -auto-approve
+            if ! terraform destroy -auto-approve; then
+                log_message "ERROR" "${RED}Terraform destroy failed!${NC}"
+                return 1
+            fi
             ;;
     esac
 }
@@ -98,34 +125,88 @@ template_exists() {
     fi
 }
 
-# Main execution
+# Function to verify deployment
+verify_deployment() {
+    log_message "INFO" "Verifying deployment..."
+    
+    # Check if Terraform outputs exist
+    if [[ -f "${PROJECT_ROOT}/terraform/last_output.json" ]]; then
+        local vm_ips=$(jq -r '.vm_ips.value | to_entries[] | "\(.key): \(.value)"' "${PROJECT_ROOT}/terraform/last_output.json" 2>/dev/null)
+        
+        if [[ -n "$vm_ips" ]]; then
+            log_message "INFO" "Deployed VMs:"
+            echo "$vm_ips" | while read -r line; do
+                log_message "INFO" "  $line"
+                
+                # Try to ping each VM (optional verification)
+                local ip=$(echo "$line" | cut -d ':' -f2 | tr -d ' ')
+                if [[ -n "$ip" && "$ip" != "null" ]]; then
+                    if ping -c 1 -W 2 "$ip" &>/dev/null; then
+                        log_message "INFO" "  ${GREEN}✓ Network reachable${NC}"
+                    else
+                        log_message "WARN" "  ${YELLOW}⚠ Network unreachable (VM may still be booting)${NC}"
+                    fi
+                fi
+            done
+        fi
+    fi
+}
+
+# Main execution with timing and error handling
 main() {
+    local start_time=$(date +%s)
+    
     # Create new log file with timestamp
     mkdir -p "$(dirname "$LOG_FILE")"
     echo "=== Deployment started at $(date) ===" > "$LOG_FILE"
+    log_message "INFO" "Starting deployment process..."
 
     # Source environment variables
     if [[ -f "${PROJECT_ROOT}/env.sh" ]]; then
         source "${PROJECT_ROOT}/env.sh"
+        log_message "INFO" "Environment variables loaded successfully"
     else
         log_message "ERROR" "${RED}env.sh not found!${NC}"
         exit 1
     fi
 
     # Run validation
-    "${SCRIPT_DIR}/validate.sh"
+    log_message "INFO" "Validating configuration..."
+    if ! "${SCRIPT_DIR}/validate.sh"; then
+        log_message "ERROR" "${RED}Validation failed! Aborting deployment.${NC}"
+        exit 1
+    fi
+    log_message "INFO" "${GREEN}Validation successful${NC}"
 
     # Check if template exists, build if needed
     if ! template_exists; then
-        build_template
+        log_message "INFO" "Template does not exist, building now..."
+        if ! build_template; then
+            log_message "ERROR" "${RED}Failed to build template! Aborting deployment.${NC}"
+            exit 1
+        fi
+    else
+        log_message "INFO" "${GREEN}Template already exists, continuing with deployment${NC}"
     fi
 
     # Run Terraform
-    run_terraform "init"
-    run_terraform "plan"
-    run_terraform "apply"
-
-    log_message "INFO" "${GREEN}Deployment completed successfully!${NC}"
+    log_message "INFO" "Starting Terraform deployment..."
+    if ! run_terraform "init" || ! run_terraform "plan" || ! run_terraform "apply"; then
+        log_message "ERROR" "${RED}Terraform deployment failed!${NC}"
+        exit 1
+    fi
+    
+    # Verify the deployment
+    verify_deployment
+    
+    # Calculate total runtime
+    local end_time=$(date +%s)
+    local runtime=$((end_time - start_time))
+    local minutes=$((runtime / 60))
+    local seconds=$((runtime % 60))
+    
+    log_message "INFO" "${GREEN}Deployment completed successfully in ${minutes}m ${seconds}s!${NC}"
+    log_message "INFO" "Log file: ${LOG_FILE}"
 }
 
 # Help message

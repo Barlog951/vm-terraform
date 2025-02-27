@@ -31,5 +31,5 @@ module "vms" {
     }
   }
 
-  timezone    = "Europe/Bratislava"
+  timezone = "Europe/Bratislava"
 }

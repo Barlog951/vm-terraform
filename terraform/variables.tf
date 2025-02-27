@@ -45,11 +45,11 @@ variable "datastores" {
 variable "vm_definitions" {
   description = "Map of VM definitions"
   type = map(object({
-    name      = string
-    hostname  = string
-    cpu       = number
-    memory    = number
-    datastore = string
+    name        = string
+    hostname    = string
+    cpu         = number
+    memory      = number
+    datastore   = string
     environment = optional(string, "testing")
     network_interfaces = list(object({
       network    = string
